@@ -1,0 +1,54 @@
+name = "dropbear"
+# Dropbear 2022.83 — a small SSH-2 server + client + keygen, unmodified upstream (config via
+# localoptions.h + sysroot headers, no source patches). Chosen over OpenSSH for NanOS: it runs as
+# root WITHOUT privilege separation (no chroot/setuid-to-nobody, which OpenSSH mandates), and it
+# bundles its own crypto (libtomcrypt/libtommath) so it needs no OpenSSL linkage. Uses the kernel
+# PTY (FAZA H), getpwuid login shell, and /dev/urandom (the FAZA 0 CSPRNG) for keys.
+source = "dir:dropbear-src"
+build = "autotools"
+configure = [
+  # NOTE: CFLAGS/LDFLAGS are NOT pinned here — they come from the environment (precious autoconf
+  # vars CFLAGS/LDFLAGS), set arch-specifically by NanOS's `make dropbear`. Both arches force a
+  # non-PIC, fixed-base ET_EXEC (`-fno-pie -fno-PIC` + `-no-pie`): default gcc PIC accesses data
+  # symbols (stderr/stdout) through the GOT, and mknx does not turn those GOT references into .nxe
+  # data imports, so stderr would resolve to address 0 and fprintf(stderr,...) faults. The i686
+  # branch passes just those; the x86_64 branch additionally passes -mcmodel=small -mno-red-zone
+  # (the NanOS LP64 user ABI) and -include nx-dllimport.h (x86_64 references the stdio/errno DATA
+  # exports of libc.ndl RIP-relative, which the shim redirects through the import table). Passing
+  # via env (not as a configure arg) is what lets the one shared manifest serve both arches.
+  # Don't let configure auto-enable its "hardened build" flags. The HARDEN probe adds -fPIE +
+  # -Wl,-pie (and -D_FORTIFY_SOURCE=2 / retpoline thunks); -Wl,-pie forces a PIE link, which the
+  # gcc-driver -no-pie can't override, and a PIE rejects the R_386_32 / R_X86_64_32 absolute relocs
+  # of NanOS's non-PIC fixed-base ET_EXEC ("can not be used when making a PIE object"). On i686 the
+  # probe link-fails (real link) so HARDEN stays off; on x86_64 the toolchain links test programs
+  # with --unresolved-symbols=ignore-all, so the probe falsely succeeds and PIE creeps back in. Turn
+  # it off explicitly — identical net effect on i686, correct for the NanOS user ABI on both arches.
+  "--disable-harden",
+  "--disable-zlib",          # no compression dependency
+  "--disable-lastlog",       # no lastlog/utmp/wtmp record-keeping (NanOS has none)
+  "--disable-utmp", "--disable-utmpx",
+  "--disable-wtmp", "--disable-wtmpx",
+  "--disable-loginfunc",     # don't write login records
+  "--disable-pututline", "--disable-pututxline",
+  "--disable-pam",           # password/pubkey auth, not PAM
+]
+cache = [
+  "ac_cv_func_getpass=yes",
+  "ac_cv_func_explicit_bzero=no",
+  "ac_cv_func_getrandom=yes",
+  # These exist as symbols in libc.ndl but have no prototype in picolibc's headers, so the
+  # autoconf link-probe sets HAVE_* and the call then hits an implicit-declaration error (fatal in
+  # gcc 14). Tell configure they are absent so Dropbear uses its portable fallback paths.
+  "ac_cv_func_clearenv=no",
+  # daemon() is genuinely ABSENT from the NanOS libc (not in picolibc/libc.ndl). On i686 the
+  # autoconf link-probe links for real, correctly finds it missing, and Dropbear compiles its own
+  # bundled NetBSD daemon() (compat.c). On x86_64 the cross toolchain links probes with
+  # --unresolved-symbols=ignore-all, so the probe FALSELY succeeds, HAVE_DAEMON is set, the compat
+  # daemon() is #ifdef'd out, and the server calls a non-existent daemon() and hangs before
+  # backgrounding (never reaching listen/accept). Record the truth so x86_64 matches i686 and uses
+  # the working bundled daemon(). (Same false-positive class as the vim port's ac_cv_func_setitimer=no.)
+  "ac_cv_func_daemon=no",
+]
+needs = ["libc.ndl"]
+binary = "dropbear"          # the SSH server; post_build mknx's dropbearkey + dbclient too
+install = "/nanos/bin"
