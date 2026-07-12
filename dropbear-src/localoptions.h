@@ -13,4 +13,11 @@
 #define DROPBEAR_SVR_PUBKEY_AUTH 1     /* authorized_keys (still available) */
 #define DROPBEAR_CLI_PUBKEY_AUTH 1
 
+/* NanOS libc implements getgrouplist (grp_shadow.c) but picolibc's <grp.h> has no prototype
+ * (the decl lives in libc-glue's compat-decls.h, which dropbear never includes). svr-auth.c
+ * calls it for the supplementary-group list; declare it here — localoptions.h is included
+ * everywhere via LOCALOPTIONS_H_EXISTS. */
+#include <sys/types.h>
+int getgrouplist(const char *user, gid_t group, gid_t *groups, int *ngroups);
+
 #endif /* DROPBEAR_LOCALOPTIONS_H */
